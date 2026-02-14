@@ -42,9 +42,12 @@ pip3 install -r requirements.txt
 
 ### 4. 配置环境变量
 
-在项目根目录创建 `.env` 文件,配置以下参数:
+建议参考 `.env_example` 文件在项目根目录创建 `.env` 文件, 并配置以下参数:
 
 ```bash
+# 复制示例文件
+cp .env_example .env  # 或是直接创建 .env 文件并填入信息
+
 # 飞书应用凭证
 FEISHU_APP_ID=your_feishu_app_id
 FEISHU_APP_SECRET=your_feishu_app_secret
@@ -80,7 +83,8 @@ python3 main.py
 markdown2feishuDoc/
 ├── main.py                     # 主入口程序
 ├── requirements.txt            # Python 依赖
-├── .env                        # 环境配置(需手动创建)
+├── .env                        # 环境配置(需手动创建，已加入 gitignore)
+├── .env_example                # 环境配置示例文件
 ├── README.md                   # 本文档
 ├── config/
 │   ├── __init__.py
