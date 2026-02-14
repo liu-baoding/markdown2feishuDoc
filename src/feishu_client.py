@@ -37,7 +37,8 @@ class FeishuClient:
         .build()
         resp:InternalTenantAccessTokenResponse = self.client.auth.v3.tenant_access_token.internal(request)
         if resp.code != 0:
-            raise Exception(f"获取访问令牌失败: {resp}")
+            print(f"[DEBUG] 获取访问令牌失败: code={resp.code}, msg={resp.msg}")
+            raise Exception(f"获取访问令牌失败: code={resp.code}, msg={resp.msg}")
         
         return json.loads(resp.raw.content).get('tenant_access_token')
         
@@ -123,7 +124,8 @@ class FeishuClient:
 
         import_resp: CreateImportTaskResponse = self.client.drive.v1.import_task.create(import_req)
         if import_resp.code != 0:
-            raise Exception(f"创建导入任务失败: {json.loads(import_resp)}")
+            print(f"[DEBUG] 创建导入任务失败: code={import_resp.code}, msg={import_resp.msg}")
+            raise Exception(f"创建导入任务失败: code={import_resp.code}, msg={import_resp.msg}")
         return import_resp.data.ticket 
 
     def _get_import_docx_token(self, ticket) -> str:
@@ -140,12 +142,43 @@ class FeishuClient:
         while True:
             response: GetImportTaskResponse = self.client.drive.v1.import_task.get(request)
             if response.code != 0:
-                raise Exception(f"获取导入任务状态失败: {response}")
+                print(f"[DEBUG] 获取导入任务状态失败: code={response.code}, msg={response.msg}")
+                raise Exception(f"获取导入任务状态失败: code={response.code}, msg={response.msg}")
 
             job_status = response.data.result.job_status
             if job_status == 2:  # 处理成功
-                print(f"[DEBUG] 导入文档成功")
-                return response.data.result.token
+                # [核心修正] 针对 MD 导入 Docx 存在的异步延迟问题，增加重试获取 token 机制
+                # 任务刚成功时 token 可能尚未就绪，先等待 5 秒
+                time.sleep(5)
+                doc_token = None
+                retry_count = 0
+                while retry_count < 5:
+                    raw_content = response.raw.content.decode('utf-8') if hasattr(response, 'raw') else "{}"
+                    result = response.data.result
+                    
+                    # 尝试多种路径获取 token
+                    doc_token = getattr(result, 'token', None) or getattr(result, 'file_token', None)
+                    if not doc_token:
+                        try:
+                            resp_json = json.loads(raw_content)
+                            res_data = resp_json.get('data', {}).get('result', {})
+                            doc_token = res_data.get('token') or res_data.get('file_token') or res_data.get('obj_token')
+                            if not doc_token and res_data.get('url'):
+                                doc_token = res_data.get('url').split('/')[-1].split('?')[0]
+                        except:
+                            pass
+                    
+                    if doc_token:
+                        break
+                        
+                    print(f"[DEBUG] 任务成功但未检测到 token，等待 2s 后重试 ({retry_count + 1}/5)...")
+                    time.sleep(2)
+                    response = self.client.drive.v1.import_task.get(request)
+                    retry_count += 1
+                
+                print(f"[DEBUG] 导入任务最终响应内容: {response.raw.content.decode('utf-8') if hasattr(response, 'raw') else 'None'}")
+                print(f"[DEBUG] 导入文档成功, doc_token: {doc_token}")
+                return doc_token
             elif job_status == 0 or job_status == 1:  # 初始化或处理中
                 print("任务处理中...")
             else:  # job_status == 3，处理失败
@@ -188,19 +221,22 @@ class FeishuClient:
             doc_token: 文档token
             ima_path_list: markdown中记录的图片地址列表
         """
+        print(f"[DEBUG] 开始获取文档块, doc_token: {doc_token}")
         # 获取文档所有块
         request: ListDocumentBlockRequest = ListDocumentBlockRequest.builder() \
-            .page_size(500) \
             .document_id(doc_token) \
-            .document_revision_id(-1) \
-        .build()
+            .page_size(500) \
+            .build()
         # 访问img_path_list的索引位置
         img_path_index = 0
 
         while True:
             resp: ListDocumentBlockResponse = self.client.docx.v1.document_block.list(request)
             if resp.code != 0:
-                raise Exception(f"获取文档块失败: {resp}")
+                print(f"[DEBUG] 获取文档块失败: code={resp.code}, msg={resp.msg}")
+                if hasattr(resp, 'raw') and resp.raw:
+                    print(f"[DEBUG] 原始响应: {resp.raw.content}")
+                raise Exception(f"获取文档块失败: code={resp.code}, msg={resp.msg}")
                 
             # 遍历所有块
             for block in resp.data.items:
@@ -247,8 +283,9 @@ class FeishuClient:
         
         resp: UploadAllMediaResponse = self.client.drive.v1.media.upload_all(request)
         if resp.code != 0:
-            raise Exception(f"上传图片到云文档失败: {resp}")
-        print(f"上传图片到云文档成功: {resp}")
+            print(f"[DEBUG] 上传图片到云文档失败: code={resp.code}, msg={resp.msg}")
+            raise Exception(f"上传图片到云文档失败: code={resp.code}, msg={resp.msg}")
+        print(f"上传图片到云文档成功: {resp.data.file_token}")
         return resp.data.file_token
 
     def _update_doc_image_block(self, file_path, block_id, document_id, image_token):
@@ -267,7 +304,6 @@ class FeishuClient:
         request: PatchDocumentBlockRequest = PatchDocumentBlockRequest.builder() \
             .document_id(document_id) \
             .block_id(block_id) \
-            .document_revision_id(-1) \
             .request_body(UpdateBlockRequest.builder()
                 .replace_image(ReplaceImageRequest.builder()
                     .token(image_token)
@@ -280,7 +316,8 @@ class FeishuClient:
         # 发起请求
         response: PatchDocumentBlockResponse = self.client.docx.v1.document_block.patch(request)
         if response.code != 0:
-            raise Exception(f"更新图片块失败: {response}")
+            print(f"[DEBUG] 更新图片块失败: code={response.code}, msg={response.msg}")
+            raise Exception(f"更新图片块失败: code={response.code}, msg={response.msg}")
         print("更新图片块成功")
 
     def _del_file(self, file_token): 
@@ -292,5 +329,6 @@ class FeishuClient:
         .build()
         resp: DeleteFileResponse = self.client.drive.v1.file.delete(request)
         if resp.code!= 0:
-            raise Exception(f"删除文件失败: {json.loads(resp)}")
+            print(f"[DEBUG] 删除文件失败: code={resp.code}, msg={resp.msg}")
+            raise Exception(f"删除文件失败: code={resp.code}, msg={resp.msg}")
         print("删除文件成功")
