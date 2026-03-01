@@ -278,6 +278,7 @@ class FeishuClient:
         )
         # 访问img_path_list的索引位置
         img_path_index = 0
+        num_img = len(img_path_list)
 
         while True:
             resp: ListDocumentBlockResponse = self.client.docx.v1.document_block.list(request)
@@ -290,10 +291,10 @@ class FeishuClient:
             # 遍历所有块
             for block in resp.data.items:
                 # 检查是否为图片块
-                if block.block_type == 27 and img_path_index < len(img_path_list):  # 图片块
+                if block.block_type == 27 and img_path_index < num_img:  # 图片块
                     # 上传图片到飞书文档指定的 block 中
                     img_path = img_path_list[img_path_index]
-                    print(f"[DEBUG] [IMAGE_STEP] 正在处理第 {img_path_index + 1} 张图片: {img_path}")
+                    print(f"[DEBUG] [IMAGE_STEP] 正在处理第 {img_path_index + 1} / {num_img} 张图片: {img_path}")
 
                     try:
                         image_token = self._upload_image_to_doc(img_path, block.block_id, doc_token)
